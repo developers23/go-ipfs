@@ -50,7 +50,7 @@ time.
 	Arguments: []cmdkit.Argument{
 		cmdkit.StringArg("url", true, false, "URL to add to IPFS"),
 	},
-	Type: BlockStat{},
+	Type: &BlockStat{},
 
 	Run: func(req *cmds.Request, res cmds.ResponseEmitter, env cmds.Environment) error {
 		url := req.Arguments[0]
@@ -107,7 +107,7 @@ time.
 			return err
 		}
 
-		err = cmds.EmitOnce(res, BlockStat{
+		err = cmds.EmitOnce(res, &BlockStat{
 			Key:  root.Cid().String(),
 			Size: int(hres.ContentLength),
 		})
