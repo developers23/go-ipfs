@@ -262,27 +262,39 @@ func (rw *RefWriter) writeRefsRecursive(n ipld.Node, depth int) (int, error) {
 	for i, ng := range ipld.GetDAG(rw.Ctx, rw.DAG, n) {
 		lc := n.Links()[i].Cid
 		goDeeper, shouldWrite := rw.visit(lc, depth+1) // The children are at depth+1
+
+		// Avoid "Get()" on the node. We did a Get on it before
+		// (we printed it) and must not go deeper. This is an
+		// optimization for pruned branches.
+		if !shouldWrite && !goDeeper {
+			continue
+		}
+
+		// We must write it because it's new, or go deeper. In any case
+		// we need to make sure this node is fetched and stored.
+		nd, err := ng.Get(rw.Ctx)
+		if err != nil {
+			return count, err
+		}
+		count++
+
+		// Output this node if we we should
 		if shouldWrite {
 			if err := rw.WriteEdge(nc, lc, n.Links()[i].Name); err != nil {
 				return count, err
 			}
 		}
 
-		if !goDeeper {
-			continue
-		}
-
-		nd, err := ng.Get(rw.Ctx)
-		if err != nil {
-			return count, err
-		}
-
-		c, err := rw.writeRefsRecursive(nd, depth+1)
-		count += c
-		if err != nil {
-			return count, err
+		// Keep going deeper if we should
+		if goDeeper {
+			c, err := rw.writeRefsRecursive(nd, depth+1)
+			count += c
+			if err != nil {
+				return count, err
+			}
 		}
 	}
+
 	return count, nil
 }
 
@@ -292,17 +304,26 @@ func (rw *RefWriter) writeRefsRecursive(n ipld.Node, depth int) (int, error) {
 //
 // visit will do branch pruning depending on rw.MaxDepth, previously visited
 // cids and whether rw.Unique is set. i.e. rw.Unique = false and
-// rw.MaxDepth = 1 disables any pruning. But setting rw.Unique to true will
-// prune already visited branches.
+// rw.MaxDepth = -1 disables any pruning. But setting rw.Unique to true will
+// prune already visited branches at the cost of keeping as set of visited
+// CIDs in memory.
 func (rw *RefWriter) visit(c *cid.Cid, depth int) (bool, bool) {
+	atMaxDepth := rw.MaxDepth >= 0 && depth == rw.MaxDepth
 	overMaxDepth := rw.MaxDepth >= 0 && depth > rw.MaxDepth
 
-	// The two cases where we can shortcut right away are:
-	// - When not unique: we print when not overMaxDepth and continue
-	//   in that case
-	// - When overMaxDepth: we do not continue and do not print
-	if !rw.Unique || overMaxDepth {
-		return !overMaxDepth, !overMaxDepth
+	// Shortcut when we are over max depth. In practice, this
+	// only applies when calling refs with --maxDepth=0, as root's
+	// children are already over max depth. Otherwise nothing should
+	// hit this.
+	if overMaxDepth {
+		return false, false
+	}
+
+	// We can shortcut right away if we don't need unique output:
+	//   - we keep traversing when not atMaxDepth
+	//   - always print
+	if !rw.Unique {
+		return !atMaxDepth, true
 	}
 
 	// Unique == true from this point.
@@ -310,9 +331,10 @@ func (rw *RefWriter) visit(c *cid.Cid, depth int) (bool, bool) {
 	if rw.seen == nil {
 		rw.seen = make(map[string]int)
 	}
-
 	key := string(c.Bytes())
 	oldDepth, ok := rw.seen[key]
+
+	// Unique == true && depth < MaxDepth (or unlimited) from this point
 
 	// Branch pruning cases:
 	// - We saw the Cid before and either:
@@ -324,12 +346,13 @@ func (rw *RefWriter) visit(c *cid.Cid, depth int) (bool, bool) {
 		return false, false
 	}
 
-	// Final case, we must keep exploring the DAG from this CID.
+	// Final case, we must keep exploring the DAG from this CID
+	// (unless we hit the depth limit).
 	// We note down its depth because it was either not seen
 	// or is lower than last time.
 	// We print if it was not seen.
 	rw.seen[key] = depth
-	return true, !ok
+	return !atMaxDepth, !ok
 }
 
 // Write one edge
