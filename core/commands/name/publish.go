@@ -131,7 +131,7 @@ Alternatively, publish an <ipfs-path> using a valid PeerID (as listed by
 		if err != nil {
 			return err
 		}
-		
+
 		return cmds.EmitOnce(res, output)
 	},
 	Encoders: cmds.EncoderMap{
