@@ -263,29 +263,39 @@ func (rw *RefWriter) writeRefsRecursive(n ipld.Node, depth int) (int, error) {
 		lc := n.Links()[i].Cid
 		goDeeper, shouldWrite := rw.visit(lc, depth+1) // The children are at depth+1
 
-		// Avoid "Get()" on the node. We did a Get on it before
-		// (we printed it) and must not go deeper. This is an
-		// optimization for pruned branches.
+		// Avoid "Get()" on the node and continue with next Link.
+		// We can do this if:
+		// - We printed it before (thus it was already seen and
+		//   fetched with Get()
+		// - AND we must not go deeper.
+		// This is an optimization for pruned branches which have been
+		// visited before.
 		if !shouldWrite && !goDeeper {
 			continue
 		}
 
-		// We must write it because it's new, or go deeper. In any case
-		// we need to make sure this node is fetched and stored.
+		// We must Get() the node because:
+		// - it is new (never written)
+		// - OR we need to go deeper.
+		// This ensures printed refs are always fetched.
 		nd, err := ng.Get(rw.Ctx)
 		if err != nil {
 			return count, err
 		}
-		count++
 
-		// Output this node if we we should
+		// Write this node if not done before (or !Unique)
 		if shouldWrite {
 			if err := rw.WriteEdge(nc, lc, n.Links()[i].Name); err != nil {
 				return count, err
 			}
+			count++
 		}
 
-		// Keep going deeper if we should
+		// Keep going deeper. This happens:
+		// - On unexplored branches
+		// - On branches not explored deep enough
+		// Note when !Unique, branches are always considered
+		// unexplored and only depth limits apply.
 		if goDeeper {
 			c, err := rw.writeRefsRecursive(nd, depth+1)
 			count += c
